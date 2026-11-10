@@ -2,6 +2,7 @@
 //
 // 사용법
 //   1. 크롬에서 쿠팡 로그인 후 https://mc.coupang.com/ssr/desktop/order/list 열기
+//      기간은 아래 FROM / TO 값을 바꾸면 됩니다 (기본: 2026-09-01 ~ 2026-11-30).
 //      (특정 연도만 받고 싶으면 연도 탭을 먼저 눌러두세요)
 //   2. F12 → Console 탭 → 이 파일 전체를 붙여넣고 Enter
 //      (처음이면 크롬이 "allow pasting" 입력을 요구할 수 있음)
@@ -13,8 +14,18 @@
 //   본인 브라우저의 로그인 세션으로 같은 사이트 페이지만 요청하며, 외부로 아무것도 보내지 않습니다.
 
 (async () => {
+  // ▼ 가져올 기간 (주문일 기준, 한국시간, 양 끝 포함). 비우면('') 제한 없음.
+  const FROM = '2026-09-01';
+  const TO = '2026-11-30';
+
   const MAX_PAGES = 300; // 안전장치
   const DELAY_MS = 800; // 페이지 사이 대기 (서버 부담 줄이기)
+
+  const DAY = 24 * 3600 * 1000;
+  const kstMidnight = (ymd) => Date.parse(`${ymd}T00:00:00+09:00`);
+  const fromTs = FROM ? kstMidnight(FROM) : -Infinity;
+  const toTs = TO ? kstMidnight(TO) + DAY : Infinity; // TO 당일 끝까지
+  const inRange = (o) => o.orderedAt >= fromTs && o.orderedAt < toTs;
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const kst = (ts) => (ts ? new Date(ts + 9 * 3600 * 1000).toISOString() : '');
@@ -62,10 +73,16 @@
     }
     const fresh = data.orderList.filter((o) => !seen.has(o.orderId));
     fresh.forEach((o) => seen.add(o.orderId));
-    orders.push(...fresh);
+    const matched = fresh.filter(inRange);
+    orders.push(...matched);
     const pg = data.orderPagination || {};
-    console.log(`[coupang-csv] pageIndex=${pageIndex}: 신규 ${fresh.length}건 (누적 ${orders.length}건)`, pg);
+    console.log(
+      `[coupang-csv] pageIndex=${pageIndex}: 신규 ${fresh.length}건 중 기간 내 ${matched.length}건 (누적 ${orders.length}건)`,
+      pg,
+    );
     if (fresh.length === 0 || !pg.hasNext) break;
+    // 주문은 최신순이므로, 이 페이지가 전부 FROM 이전이면 더 볼 필요 없음
+    if (fresh.every((o) => o.orderedAt < fromTs)) break;
     pageIndex = pg.nextPageIndex ?? pageIndex + 1;
     await sleep(DELAY_MS);
   }
@@ -114,7 +131,8 @@
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `coupang_orders_${fmtDate(Date.now()).replace(/-/g, '')}.csv`;
+  const tag = FROM || TO ? `${(FROM || 'start').replace(/-/g, '')}-${(TO || 'now').replace(/-/g, '')}` : fmtDate(Date.now()).replace(/-/g, '');
+  a.download = `coupang_orders_${tag}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
